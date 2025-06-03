@@ -4,7 +4,7 @@
 
 ↓Flux-dev Q2_Kでの実験
 
-モデルはhttps://huggingface.co/furusu/experimental-ggufsにおいてます。
+モデルは[ここ](https://huggingface.co/furusu/experimental-ggufs)においてます。
 ![ああ](https://github.com/user-attachments/assets/33b2fca2-0b61-4e3e-82be-d3e4ec81e7ec)
 
 
