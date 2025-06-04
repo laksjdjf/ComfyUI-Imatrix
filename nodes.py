@@ -24,12 +24,12 @@ class ImatrixOps(comfy.ops.manual_cast):
     class Conv2d(comfy.ops.manual_cast.Conv2d):
         def __init__(self, in_channels, out_channels, kernel_size, *args, **kwargs):
             super().__init__(in_channels, out_channels, kernel_size, *args, **kwargs)
-            self.imatrix = torch.ones(in_channels * self.kernel_size[0] * self.kernel_size[1])
+            self.imatrix = torch.ones(in_channels)
             self.num_counts = 0
 
         def forward(self, x, *args, **kwargs):
             self.num_counts += 1
-            imatrix = x.detach().clone().float().pow(2).mean(dim=(0, 2, 3)).cpu().repeat(self.kernel_size[0] * self.kernel_size[1])
+            imatrix = x.detach().clone().float().pow(2).mean(dim=(0, 2, 3)).cpu()
             self.imatrix = imatrix / self.num_counts + self.imatrix * (self.num_counts - 1) / self.num_counts
             return super().forward(x, *args, **kwargs)
 
@@ -85,7 +85,17 @@ class SaveImatrix:
         imatrix_data = {}
         for name, module in model.model.diffusion_model.named_modules():
             if hasattr(module, "imatrix") and module.imatrix is not None:
-                imatrix_data[name + ".weight"] = module.imatrix.float().cpu().numpy().tolist()
+                tensor = module.imatrix.float().cpu()
+
+                if isinstance(module, comfy.ops.manual_cast.Conv2d):
+                    tensor = tensor.repeat_interleave(module.kernel_size[0] * module.kernel_size[1])
+                multiplier = 1
+                input_dims = tensor.shape[0]
+                while input_dims % 256 != 0:
+                    input_dims *= 2
+                    multiplier *= 2
+                tensor = tensor.repeat(multiplier)
+                imatrix_data[name + ".weight"] = tensor.numpy().tolist()
         
         imatrix_file = os.path.join(DATE_DIR, f"{file_name}.dat")
         save_imatrix(imatrix_file, imatrix_data)
