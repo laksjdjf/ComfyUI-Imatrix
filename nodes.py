@@ -5,6 +5,14 @@ import comfy.ops
 from .utils import save_imatrix
 import os
 
+import gguf
+TORCH_COMPATIBLE_QTYPES = (None, gguf.GGMLQuantizationType.F32, gguf.GGMLQuantizationType.F16)
+def is_torch_compatible(tensor):
+    return tensor is None or getattr(tensor, "tensor_type", None) in TORCH_COMPATIBLE_QTYPES
+
+def is_quantized(tensor):
+    return not is_torch_compatible(tensor)
+
 CURRENT_DIR = os.path.dirname(os.path.realpath(__file__))
 DATE_DIR = os.path.join(CURRENT_DIR, "imatrix_data")
 
@@ -102,3 +110,76 @@ class SaveImatrix:
         
         print(f"Saved importance matrix to {imatrix_file}")
         return {}
+
+class LoRAdiff:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "model": ("MODEL",),
+                "gguf_model": ("MODEL", ),
+                "rank": ("INT", {
+                    "default": 16, 
+                    "min": 1, #Minimum value
+                    "max": 320, #Maximum value
+                    "step": 1, #Slider's step
+                    "display": "number" # Cosmetic only: display as "number" or "slider"
+                }),
+                "device": (["cuda", "cpu"], ),
+                "dtype": (["float32", "float16", "bfloat16"], ),
+                "file_name": ("STRING", {"multiline": False, "default": "diff"}),
+                "extension": (["safetensors"], ),
+            }
+        }
+    
+    RETURN_TYPES = ()
+    FUNCTION = "lora_diff"
+
+    CATEGORY = "imatrix"
+    OUTPUT_NODE = True
+
+    def lora_diff(self, model, gguf_model, rank, device="cuda", dtype="float32", file_name="merdiffged", extension="safetensors"):
+        dtype = torch.float32 if dtype == "float32" else torch.float16 if dtype == "float16" else torch.bfloat16
+        state_dict = {}
+        for (name_org, module_org), (name_gguf, module_gguf) in zip(
+            model.model.diffusion_model.named_modules(), 
+            gguf_model.model.diffusion_model.named_modules()
+        ):
+            if hasattr(module_org, "weight") and is_quantized(module_gguf.weight):
+                weight_org = module_org.weight.data.detach().clone().to(device=device, dtype=torch.float32)
+                weight_gguf = module_gguf.get_weight(module_gguf.weight.to("cuda"), dtype=torch.float32).detach().clone().to(device=device)
+
+                diff = weight_org - weight_gguf
+                org_shape = diff.shape
+
+                U, S, Vh = torch.linalg.svd(diff.flatten(1))
+
+                U = U[:, :rank]
+                S = S[:rank]
+                U = U @ torch.diag(S)
+                Vh = Vh[:rank, :]
+                dist = torch.cat([U.flatten(), Vh.flatten()])
+                hi_val = torch.quantile(dist, 0.99)
+                low_val = -hi_val
+
+                U = U.clamp(low_val, hi_val)
+                Vh = Vh.clamp(low_val, hi_val)
+
+                if len(org_shape) == 4:
+                    U = U.reshape(org_shape[0], rank, 1, 1)
+                    Vh = Vh.reshape(rank, org_shape[1], org_shape[2], org_shape[3])
+                
+                prefix_key = "lora_unet_" + name_org.replace(".", "_")
+                state_dict[prefix_key + ".lora_up.weight"] = U.to(device=device, dtype=dtype)
+                state_dict[prefix_key + ".lora_down.weight"] = Vh.to(device=device, dtype=dtype)
+                state_dict[prefix_key + ".alpha"] = torch.tensor(rank, device=device, dtype=dtype)
+
+                print(f"key: {prefix_key}, rank: {rank}, shape: {org_shape}, up_shape: {U.shape}, down_shape: {Vh.shape}")
+        
+        save_path = os.path.join(folder_paths.folder_names_and_paths["loras"][0][0], file_name + "." + extension)
+        comfy.utils.save_torch_file(state_dict, save_path)
+
+        return {}
+
+                
+
