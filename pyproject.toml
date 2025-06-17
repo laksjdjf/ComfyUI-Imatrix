@@ -1,0 +1,15 @@
+[project]
+name = "imatrix"
+description = "This is an experimental node for generating an *imatrix* file to reduce quantization errors in GGUF files used with ComfyUI-GGUF."
+version = "1.0.0"
+license = {file = "LICENSE"}
+
+[project.urls]
+Repository = "https://github.com/laksjdjf/ComfyUI-Imatrix"
+#  Used by Comfy Registry https://registry.comfy.org
+
+[tool.comfy]
+PublisherId = ""
+DisplayName = "ComfyUI-Imatrix"
+Icon = ""
+includes = []
